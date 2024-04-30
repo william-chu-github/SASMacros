@@ -6,7 +6,7 @@ PARENTTABLE: input dataset of parent items, where some variables, VARS, need to 
   by PARENTIDS
 CHILDTABLE: input dataset of child items... for each PARENTIDS, their VARS will be divided
   proportionally among the rows of the child table... CHILDTABLE must include columns
-  PARENTIDS and PROPORTIONVAR... the rows of the child table should not overlap, or
+  PARENTIDS, CHILDIDS, and PROPORTIONVAR... the rows of the child table should not overlap, or
   double-counting will happen in the allocation steps (e.g., if the parents are current
   CUs, and the children are PC_CBs, then the rows of the child table should be the sum of
   the BBs in both the PC_CB and CC_CU)
@@ -18,6 +18,8 @@ VARS: space-separated list of variables in the parent table to allocate proporti
 PROPORTIONVAR: the variable on the child input file to be used to calculate proportions...
   the variable is summed up over the PARENTIDS, and each input row has a certain percentage
   of this total... that percentage of each variable in VARS is assigned to the row
+  the expectation is that each PARENTID will a nonzero sum of PROPORTIONVAR--otherwise proportions
+  cannot be assigned, because there are no data--in this case, the macro will halt with an error
 METHOD:
 * 0 = no rounding (probably not suitable for integer-valued items like pop or dwelling counts)
 * 1 = round top x: rounded to nearest integer (banker's rounding), then after sorting by
@@ -35,6 +37,7 @@ METHOD:
 Macro creates temporary datasets which are later deleted, using %GetNewDSNames to prevent
 collisions.
 */
+
 %macro AssignProportional(
   ParentTable, ChildTable, OutDS, ParentIDs, ChildIDs, Vars, ProportionVar, Method
 );
@@ -66,6 +69,17 @@ collisions.
   %let CurrWord = %scan(&Vars, &Pos);
 %end;
 
+proc sql;
+create table &TempDS as
+  select %Separate(&ParentIDs), sum(&ProportionVar) as GroupProportionSum
+    from &ChildTable
+    group by %Separate(&ParentIDs)
+    having GroupProportionSum = 0;
+quit;
+run;
+%ErrorOut(&TempDS, %str(Something went wrong: parent IDs have groups with zero &ProportionVar sum, impossible to calculate fractions));
+
+
 * total of proportion variable at the parent level ;
 proc sql;
 create table &TempDS as
@@ -90,10 +104,11 @@ create table &OutDS as
           %Interleave(
             %Prefix(&ParentIDs, Child.), %Prefix(&ParentIDs, Z.), Interleaver = %str( = ),
             Separator = %str( and )
-          )
-    order by &ParentComma;
+          );
 quit;
 run;
+proc sort data = &OutDS; by &ParentIDs &ChildIDs; run;
+
 * now, need to round and adjust sums to original parent group ;
 %if (&Method > 0)
   %then
@@ -192,15 +207,19 @@ run;
         %let Pos = %eval(&Pos + 1);
         %let CurrWord = %scan(&Vars, &Pos);
        %end;
+       data &OutDS;
+       set &OutDS(drop = &NewVars);
+       run;
     %end; 
 data &OutDS; /* reorder columns */
 retain &ParentIDs &ChildIDs &Vars;
-set &OutDS(drop = &NewVars);
+set &OutDS;
 run;
+proc sort data = &OutDS; by &ParentIDs &ChildIDs; run;
 /* QA assertion... input sum at parent level equals output sum */
 proc summary data = &OutDS nway missing;
 class &ParentIDs;
-var _numeric_;
+var &Vars;
 output out = &TempDS(drop = _type_ _freq_) sum = ;
 run;
 proc compare data = &ParentTable c = &TempDS outnoequal outdif noprint out = &TempDS; id &ParentIDs; run;

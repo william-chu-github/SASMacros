@@ -20,7 +20,9 @@ generalised clustering algorithm
   overlapping relationships between the identifiers, such that the first variable
   can have the same identifier value over noncontiguous clusters. Therefore, it is
   recommended that a composite key of all the variables be constructed and input as
-  the first variable, to guarantee uniqueness of the output ClusterID.
+  the first variable, to guarantee uniqueness of the output ClusterID. Note also there is degradation
+  in performance if there are many variables specified in `Block`. See %createcompositekeys for
+  a way to simplify complex keys.
 - OUTCLUST is the dataset to which to write the output. It will have
   the variables listed in BLOCK as well as new variable CLUSTERID (which
   will overwrite any variable already existing). It must not be the same as
@@ -28,11 +30,9 @@ generalised clustering algorithm
   file in an SQL step.
 - SHOWCOUNT is 0/1 depending on whether the macro should print a status
   update every time an iteration finishes
-
-The macro will create some temporary datasets in WORK:
-Z_Cluster_Adj, Z_Cluster_Adds, Z_Cluster_Done
+- CLUSTERID is the variable name to use to label clusters uniquely.
 */
-%macro Cluster(AdjFile, BlockFile, Block, OutClust, ShowCount = 1);
+%macro Cluster(AdjFile, BlockFile, Block, OutClust, ShowCount = 1, ClusterID = ClusterID);
 %local BlockComma GroupString FirstBlock RenameString MatchString Changed
        NumDone;
 * separate variables with comma for use in SQL steps ;
@@ -55,6 +55,12 @@ Z_Cluster_Adj, Z_Cluster_Adds, Z_Cluster_Done
     Separator = %str ( and )
   );
 
+%local TabNames ZAdj ZAdds ZDone;
+%let TabNames = %GetNewDSNames(NumNames = 3);
+%let ZAdj = %scan(&TabNames, 1);
+%let ZAdds = %scan(&TabNames, 2);
+%let ZDone = %scan(&TabNames, 3);
+
 proc sql;
 * initialise output file ;
 create table &OutClust as
@@ -62,7 +68,7 @@ create table &OutClust as
     from &BlockFile
     order by &BlockComma;
 * extract adjacencies of all input blocks ;
-create table Z_Cluster_Adj as
+create table &ZAdj as
   select Adj.*
     from &OutClust L, &AdjFile Adj, &OutClust R
     where &MatchString
@@ -77,7 +83,7 @@ run;
   proc sql noprint;
   * for each block, calculate the minimum and maximum cluster IDs of
     adjacent blocks, including the self-intersections ;
-  create table Z_Cluster_Adds(drop = TheMin TheMax) as
+  create table &ZAdds(drop = TheMin TheMax) as
     select distinct &GroupString, min(R.ClusterID) as TheMin,
            max(R.ClusterID) as TheMax,
            case
@@ -88,14 +94,14 @@ run;
              when (L.ClusterID >= calculated TheMax) then L.ClusterID
              else calculated TheMax
            end as MaxID
-      from &OutClust L, Z_Cluster_Adj Adj, &OutClust R
+      from &OutClust L, &ZAdj Adj, &OutClust R
       where &MatchString
       group by &GroupString
       order by &BlockComma;
   * if the min/max are not equal, then the cluster can be
     extended... arbitrarily put it into the cluster with the minimum
     cluster ID, to make the algorithm deterministic ;
-  select count(*) into :Changed from Z_Cluster_Adds where MinID ~= MaxID;
+  select count(*) into :Changed from &ZAdds where MinID ~= MaxID;
   * algorithm can take a while... print updates ;
   %if (&ShowCount)
     %then %put Number of blocks changed this iteration: %trim(&Changed);
@@ -109,7 +115,7 @@ run;
         data &OutClust;
         update
           &OutClust
-          Z_Cluster_Adds(drop = MaxID rename = (MinID = ClusterID))
+          &ZAdds(drop = MaxID rename = (MinID = ClusterID))
         ;
         by &Block;
         run;
@@ -117,22 +123,22 @@ run;
         * clusters are done when all adjacencies are within the cluster
           itself -- then adjacency relationships in those blocks can be
           deleted to speed execution ;
-        create table Z_Cluster_Done as
+        create table &ZDone as
           select distinct &GroupString
-            from &OutClust L, Z_Cluster_Adj Adj, &OutClust R
+            from &OutClust L, &ZAdj Adj, &OutClust R
             where &MatchString
             group by L.ClusterID
             having sum(L.ClusterID ~= R.ClusterID) = 0
             order by &BlockComma;
-        select count(*) into :NumDone from Z_Cluster_Done;
+        select count(*) into :NumDone from &ZDone;
         quit;
         run;
         %if (&NumDone > 0)
           %then
             %do;
               * delete base side ;
-              data Z_Cluster_Adj;
-              merge Z_Cluster_Adj Z_Cluster_Done(in = Del);
+              data &ZAdj;
+              merge &ZAdj &ZDone(in = Del);
               by &Block;
               if not Del;
               run;
@@ -140,5 +146,5 @@ run;
       %end;
 %end;
 * delete temporary work ;
-proc delete data = Z_Cluster_Adj Z_Cluster_Adds Z_Cluster_Done; run;
+proc delete data = &ZAdj &ZAdds &ZDone; run;
 %mend;

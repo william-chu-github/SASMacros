@@ -25,13 +25,6 @@ rounded, and the "biggest" block is different for each variable.
 - LEVELVARS is a space-separated list of the parent geographic level whose
   summed allocation values are to be maintained.
 
-This macro creates one auxiliary dataset which is deleted after execution:
-Z_Rebalance_Levels
-
-It also creates temporary variables in the output dataset which could
-possibly interfere with existing variables. The variable names are exactly
-the ones listed in REBALVARS, but with "_SUM" suffixed.
-
 Example:
 %Rebalance(Alloc, Alloc, POP DWELL, ALLOC_POP ALLOC_DWELL, DA_UID);
 The parent geographic level is DA_UID. The objective is to adjust the
@@ -41,7 +34,7 @@ given that the allocation will yield only non-negative values, so it would
 be beneficial to have the input dataset sorted by DA_UID and descending size.
 */
 %macro Rebalance(InDS, OutDS, SourceVars, RebalVars, LevelVars);
-%local SumVars LastLevel;
+%local SumVars LastLevel TempDS TempVar;
 %let SourceVars = %left(%cmpres(%trim(&SourceVars)));
 %let RebalVars = %left(%cmpres(%trim(&RebalVars)));
 * create list of sum variables over each level where rebalancing occurs ;
@@ -59,28 +52,89 @@ be beneficial to have the input dataset sorted by DA_UID and descending size.
       set &InDS;
       run;
     %end;
+
+%local TabNames InitialSum ParentCount;
+%let TabNames = %GetNewDSNames(NumNames = 2);
+%let InitialSum = %scan(&TabNames, 1);
+%let ParentCount = %scan(&TabNames, 2);
+
 * calculate sum of allocation over levels ;
 proc summary data = &OutDS nway missing;
 class &LevelVars;
 var &RebalVars;
-output out = Z_Rebalance_Levels(drop = _type_ _freq_) sum = /autoname;
+output out = &InitialSum(drop = _type_ _freq_) sum = &SourceVars;
 run;
-* merge sums with data ;
-data &OutDS;
-merge &OutDS Z_Rebalance_Levels;
-by &LevelVars;
+proc sql;
+create table &ParentCount as
+  select distinct %Separate(&LevelVars), %Separate(&SourceVars)
+    from &InDS
+    order by %Separate(&LevelVars);
+quit;
 run;
-* adjust first occurrence of level so allocated sum is equal to real value ;
-data &OutDS(drop = I &SumVars);
+proc compare
+  data = &InitialSum c = &ParentCount
+  out = &ParentCount(
+    drop = _type_ _obs_
+    rename = (
+      %Interleave(&SourceVars, &RebalVars)
+    )
+  )
+  noprint
+;
+/*
+numeric result of the proc compare is <compare> minus <base>
+if <global value> is bigger than <allocated sum>, there is a deficit in the allocation,
+and the difference needs to be added to the raw count
+if <global value> is smaller than <allocated sum>, there is a surplus in the allocation,
+and the difference needs to be subtracted from the raw count
+so, <parent count> minus <initial sum> is negative->surplus in allocation->
+adding a negative to the raw count makes it smaller and rebalances
+<parent count> minus <initial sum> is positive->deficit in allocation->
+adding a positive to the raw count makes it larger and rebalances
+*/
+id &LevelVars;
+run;
+
+* split dataset into first occurrence per geo level (this is the record that will be adjusted
+  to rebalance) and rest of the dataset ;
+data &InitialSum(keep = &LevelVars &RebalVars) &OutDS;
 set &OutDS;
 by &LevelVars;
-array SourceVars (*) &SourceVars;
-array RebalVars (*) &RebalVars;
-array SumVars (*) &SumVars;
-do I = 1 to dim(SourceVars);
-  if first.&LastLevel
-    then RebalVars(I) = RebalVars(I) - (SumVars(I) - SourceVars(I));
-end;
+output &OutDS;
+if first.&LastLevel
+  then output &InitialSum;
 run;
-proc delete data = Z_Rebalance_Levels; run;
+
+
+* sum the raw value and the adjustment ;
+data &InitialSum;
+set &InitialSum &ParentCount;
+run;
+
+
+proc summary data = &InitialSum nway;
+class &LevelVars;
+var &RebalVars;
+output out = &InitialSum(drop = _type_ _freq_) sum = ;
+run;
+
+%let TempVar = %GetNewVarNames(&OutDS);
+%let TempDS = %GetNewDSNames();
+data &OutDS &TempDS;
+set &OutDS;
+&TempVar = _n_;
+by &LevelVars;
+if first.&LastLevel
+  then output &TempDS;
+  else output &OutDS;
+run;
+data &TempDS;
+update &TempDS &InitialSum;
+by &LevelVars;
+run;
+data &OutDS(drop = &TempVar);
+set &TempDS &OutDS;
+by &TempVar;
+run;
+proc delete data = &InitialSum &ParentCount &TempDS; run;
 %mend;

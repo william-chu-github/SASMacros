@@ -22,7 +22,10 @@ pointwise adjacencies or overlapping adjacencies (PC_CB:CB clustering).
   output will be two-sided; if X-adjacent-to-Y is in the file, then so is
   Y-adjacent-to-X. The output variables will be all of the non-BLOCK variables
   from POLY, and the same variables with "_ADJ" appended (e.g., DA_UID,
-  DA_UID_ADJ). The sort order will be the non-ADJ variables, then the ADJ ones.
+  DA_UID_ADJ). Consequently, if there are existing variables on the input data
+  named <x> and <x>_ADJ, the results may be corrupted, since the macro will try
+  to create a new variable <x>_ADJ, overwriting the source <x>_ADJ value.
+  The sort order will be the non-ADJ variables, then the ADJ ones.
 - STATIC is a space-separated list of variables in the LINES dataset to keep
   (e.g., a length variable for perimeter analysis, or an ID variable).
 - SELF is 0/1; set to 1 if the link level is the actual one in the line layer
@@ -32,13 +35,6 @@ pointwise adjacencies or overlapping adjacencies (PC_CB:CB clustering).
 - SelfExpand is a space-separated list of L/R attributes in the line table
   itself; these are to be expanded into adjacency relationships in the
   output. Do not include the _L/_R tags.
-This macro creates and later deletes two datasets in WORK:
-  Z_LineAdj_Linker Z_LineAdj_Vars
-
-The output dataset creates a temporary variable which is later deleted:
-  Z_LineAdj_Diff
-In the unlikely event that a higher level geography has such a variable as a
-part of its unique ID, the macro output will likely be wrong.
 */
 %macro LineAdj(
   Line, Poly, Block, Out, Static = %str(),
@@ -47,10 +43,16 @@ part of its unique ID, the macro output will likely be wrong.
 %let Static = %trim(%left(&Static));
 %local OtherBlocks LSide RSide RenameString Adj Pos Word OtherWord SelfOther;
 * get variables in the linking file other than the block ;
+
+%local TabNames ZVars ZLinker;
+%let TabNames = %GetNewDSNames(NumNames = 2);
+%let ZVars = %scan(&TabNames, 1);
+%let ZLinker = %scan(&TabNames, 2);
+
 proc contents data = &Poly noprint nodetails
-  out = Z_LineAdj_Vars(keep = NAME VARNUM);
+  out = &ZVars(keep = NAME VARNUM);
 run;
-proc sort data = Z_LineAdj_Vars(
+proc sort data = &ZVars(
   where = (upcase(left("&Block")) ~= upcase(NAME))
 );
 by VARNUM;
@@ -66,7 +68,7 @@ run;
 
 %let OtherBlocks = ;
 proc sql noprint;
-select NAME into :OtherBlocks separated by " " from Z_LineAdj_Vars;
+select NAME into :OtherBlocks separated by " " from &ZVars;
 quit;
 run;
 * if link level is actual one present in the line layer, no need to merge ;
@@ -99,7 +101,7 @@ run;
     %do;
       proc sql;
       * sort linker ;
-      create table Z_LineAdj_Linker as
+      create table &ZLinker as
         select * from &Poly order by &Block;
       * initialise adjacency file by joining on the left side of arcs ;
       create table &Out as
@@ -107,9 +109,9 @@ run;
                  %then %Separate(&Static), ;
                %if (&SelfExpand ~= %str())
                  %then %Separate(&SelfOther), ;
-               &Line..&Block._R, Z_LineAdj_Linker.*
-          from &Line left join Z_LineAdj_Linker
-          on &Line..&Block._L = Z_LineAdj_Linker.&Block
+               &Line..&Block._R, &ZLinker..*
+          from &Line left join &ZLinker
+          on &Line..&Block._L = &ZLinker..&Block
           where %if (not &Keep0)
                   %then &Line..&Block._L and &Line..&Block._R and;
                 &Line..&Block._L ~= &Line..&Block._R
@@ -128,11 +130,11 @@ run;
       * merge right side ;
       %let RenameString = %Interleave(&Block &OtherBlocks, &Block._R &RSide);
       data &Out(%if not &Self %then drop = &Block &Block._R;);
-      merge &Out(in = Base) Z_LineAdj_Linker(rename = (&RenameString));
+      merge &Out(in = Base) &ZLinker(rename = (&RenameString));
       by &Block._R;
       if Base;
       run;
-      proc delete data = Z_LineAdj_Linker; run;
+      proc delete data = &ZLinker; run;
     %end;
 
 proc sort data = &Out %if (&Static = %str()) %then nodupkey;;
@@ -142,9 +144,21 @@ run;
 %let Adj = %Suffix(&OtherBlocks, _ADJ);
 
 * make adjacencies two-sided, and left/right neutral ;
-data &Out(drop = &LSide &RSide Z_LineAdj_Diff &SelfOther);
+%local TempVar AdditionalVars;
+%let AdditionalVars = ;
+%if (&SelfExpand ~= )
+  %then
+    %do;
+      %let AdditionalVars = &SelfExpand %Suffix(&SelfExpand, _ADJ);
+    %end;
+* SelfOther is created from SelfExpand list of variables--with _L and _R suffixes ;
+%let TempVar = %GetNewVarNames(
+  &Out, NumNames = 1, Exclusions = &LSide &RSide &SelfOther &AdditionalVars
+);
+data &Out(drop = &LSide &RSide &TempVar &SelfOther);
 set &Out;
 
+* making new variables (base and adj) for each variable in SelfExpand ;
 %let Pos = 1;
 %let Word = %scan(&SelfExpand, &Pos);
 %do %while (&Word ~= );
@@ -154,7 +168,7 @@ set &Out;
   %let Word = %scan(&SelfExpand, &Pos);
 %end;
 * output only if not self-adjacent ;
-Z_LineAdj_Diff = 0;
+&TempVar = 0;
 %let Pos = 1;
 %let Word = %scan(&OtherBlocks, &Pos);
 %do %while (&Word ~= );
@@ -164,12 +178,13 @@ Z_LineAdj_Diff = 0;
   * set adjacent variable ;
   &OtherWord = %scan(&LSide, &Pos);
   * check if variables were different ;
-  Z_LineAdj_Diff = Z_LineAdj_Diff + (&Word ~= &OtherWord);
+  &TempVar = &TempVar + (&Word ~= &OtherWord);
   %let Pos = %eval(&Pos + 1);
   %let Word = %scan(&OtherBlocks, &Pos);
 %end;
-if Z_LineAdj_Diff then output;
+if &TempVar then output;
 
+* make the relationship two-sided ;
 %let Pos = 1;
 %let Word = %scan(&SelfExpand, &Pos);
 %do %while (&Word ~= );
@@ -178,24 +193,23 @@ if Z_LineAdj_Diff then output;
   %let Pos = %eval(&Pos + 1);
   %let Word = %scan(&SelfExpand, &Pos);
 %end;
-* make the relationship two-sided ;
-Z_LineAdj_Diff = 0;
+&TempVar = 0;
 %let Pos = 1;
 %let Word = %scan(&OtherBlocks, &Pos);
 %do %while (&Word ~= );
   %let OtherWord = %scan(&Adj, &Pos);
   &Word = %scan(&LSide, &Pos);
   &OtherWord = %scan(&RSide, &Pos);
-  Z_LineAdj_Diff = Z_LineAdj_Diff + (&Word ~= &OtherWord);
+  &TempVar = &TempVar + (&Word ~= &OtherWord);
   %let Pos = %eval(&Pos + 1);
   %let Word = %scan(&OtherBlocks, &Pos);
 %end;
-if Z_LineAdj_Diff then output;
+if &TempVar then output;
 attrib _all_ label = "";
 run;
 
 proc sort data = &Out %if (&Static = %str()) %then nodupkey;;
 by &OtherBlocks &Adj;
 run;
-proc delete data = Z_LineAdj_Vars; run;
+proc delete data = &ZVars; run;
 %mend;

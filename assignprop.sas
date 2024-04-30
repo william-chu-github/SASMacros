@@ -21,6 +21,7 @@ TARGETVARS: space-separated list of variables... these are the locations to whic
   trying to assign structures
 STRUCTDS: dataset of structure info, with &StructID, &CountID, &SourceVars
 PROPDS: dataset of proportion info, with &SourceVars, &TargetVars, &ProportionVar
+SHOWCOUNTS: 0/1 indicator, whether to log progress by printing dataset counts... default 1
 
 OUTDS: output dataset with &StructVar and &TargetVars, assigning each structure to
   the target variables... if a structure could not be assigned (no proportion data), then
@@ -68,9 +69,9 @@ The method used, briefly:
 */
 %macro AssignProp(
   StructDS, PropDS, StructVar, CountID, ProportionVar, SourceVars, TargetVars,
-  OutDS
+  OutDS, ShowCounts = 1
 );
-%local Left Target LastSource TempAdds TargetCount Units DelUnits VarNameList;
+%local Left Target LastSource TempAdds TargetCount Units DelUnits VarNameList OldNotesOption;
 %let TempAdds = %GetNewDSNames();
 data &TempAdds; run;
 %let TargetData = %GetNewDSNames();
@@ -117,10 +118,12 @@ create table &OutDS like &PropDS(keep = &TargetVars);
 alter table &OutDS add &StructVar num;
 quit;
 run;
+%let OldNotesOption = %sysfunc(getoption(notes));
 options nonotes;
 
 %do %while(%CountObs(&Structs));
-  %put Proportion macro, structures left to assign: %CountObs(&Structs);
+  %if (&ShowCounts)
+    %then %put Proportion macro, structures left to assign: %CountObs(&Structs);
   * split out top struct per street ;
   data &Structs &TopStructs;
   set &Structs;
@@ -165,7 +168,7 @@ options nonotes;
   run;
   proc append base = &OutDS data = &TempAdds(keep = &TargetVars &StructVar); run;
 %end;
-options notes;
+options &OldNotesOption;
 proc delete data = &TempAdds &TopTargets &TargetData &Structs &TopStructs; run;
 %mend;
 

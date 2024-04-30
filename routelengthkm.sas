@@ -16,10 +16,6 @@ e.g.,
     WC2011BB_AL_20070920, WC2011BB_AL_TO_A_LINK_20070920,
     WC2011BB_A_20070920, RouteLength
   );
-
-The macro creates some temporary datasets in WORK which will be deleted
-after execution completes: Z_BB, Z_Line, Z_Link, Z_Expand.
-
 */
 %macro RouteLengthKM(
   LineTab, LinkTab, BBTab, OutTab,
@@ -32,6 +28,13 @@ after execution completes: Z_BB, Z_Line, Z_Link, Z_Expand.
 %let LineTab = %upcase(%left(%trim(&LineTab)));
 %let LinkTab = %upcase(%left(%trim(&LinkTab)));
 %let BBTab = %upcase(%left(%trim(&BBTab)));
+
+%local TabNames ZBBTab ZLineTab ZLinkTab ZExpandTab;
+%let TabNames = %GetNewDSNames(NumNames = 4);
+%let ZBBTab = %scan(&TabNames, 1);
+%let ZLineTab = %scan(&TabNames, 2);
+%let ZLinkTab = %scan(&TabNames, 3);
+%let ZExpandTab = %scan(&TabNames, 4);
 
 proc sql noprint;
 connect to oracle as DB(
@@ -49,7 +52,7 @@ select count(*) into :TableExists from connection to DB (
   %then
     %do;
       %put F-table;
-      create table Z_Line as select * from connection to DB (
+      create table &ZLineTab as select * from connection to DB (
         select NGD_UID, SGMNT_TYP_CDE, B.LEN / 1000 as LENGTH
           from &Schema..&LineTab A left join &Schema..F&LayerID B
           on A.SHAPE = B.FID
@@ -59,18 +62,18 @@ select count(*) into :TableExists from connection to DB (
   %else
     %do;
       %put ST-GEOM;
-      create table Z_Line as select * from connection to DB (
+      create table &ZLineTab as select * from connection to DB (
         select NGD_UID, SGMNT_TYP_CDE, SDE.ST_LENGTH(SHAPE) / 1000 as LENGTH
           from &Schema..&LineTab
           order by NGD_UID
       );
     %end;
-create table Z_Link as select * from connection to DB (
+create table &ZLinkTab as select * from connection to DB (
   select NGD_UID, BB_UID_L, BB_UID_R
     from &Schema..&LinkTab
     order by NGD_UID
 );
-create table Z_BB as select * from connection to DB (
+create table &ZBBTab as select * from connection to DB (
   select BB_UID
     from &Schema..&BBTab
     order by BB_UID
@@ -78,29 +81,29 @@ create table Z_BB as select * from connection to DB (
 quit;
 run;
 
-data Z_Expand(
+data &ZExpandTab(
   keep = SGMNT_TYP_CDE LENGTH BB_UID where = (BB_UID and SGMNT_TYP_CDE ~= 1)
 );
-merge Z_Line Z_Link;
+merge &ZLineTab &ZLinkTab;
 by NGD_UID;
 BB_UID = BB_UID_L; output;
 BB_UID = BB_UID_R; output;
 run;
-proc sort data = Z_Expand;
+proc sort data = &ZExpandTab;
 by BB_UID;
 run;
-data Z_Expand;
-merge Z_Expand(in = Base) Z_BB;
+data &ZExpandTab;
+merge &ZExpandTab(in = Base) &ZBBtab;
 by BB_UID;
 if not Base then LENGTH = 0;
 run;
 
-proc summary data = Z_Expand nway;
+proc summary data = &ZExpandTab nway;
 class BB_UID;
 var LENGTH;
 output out = &OutTab(drop = _type_ _freq_) sum = ;
 run;
 
-proc delete data = Z_BB Z_Line Z_Link Z_Expand;
+proc delete data = &ZBBTab &ZLineTab &ZLinkTab &ZExpandTab;
 run;
 %mend;

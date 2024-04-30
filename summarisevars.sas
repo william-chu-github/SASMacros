@@ -49,7 +49,7 @@ run;
       %let DSID = %sysfunc(close(&DSID));
     %end;
 %if (&ColList = )
-  %then %let ColList = %GenerateVarNames(DS = &DS);
+  %then %let ColList = %GetVarNames(DS = &DS);
 options formdlim = "-"; 
 %let CurrentColNum = 1;
 %let Column = %scan(&ColList, &CurrentColNum);

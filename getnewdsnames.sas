@@ -5,7 +5,7 @@
   disallowing specified datasets that are not yet created
   e.g., user specifies dataset abc as output, but does not exist... passing in
   NOTALLOWED = ABC ensures ABC is not returned as a possible allowable name ;
-* returns named list is space-separated and does not include a library reference ("libname.") ;
+* returned named list is space-separated and does not include a library reference ("libname.") ;
 */
 %macro GetNewDSNames(Library = WORK, NumNames = 1, NotAllowed = %str());
 %local NewDSNames CurrNum Created;

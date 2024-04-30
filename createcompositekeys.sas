@@ -9,8 +9,7 @@
 * - KEYNAME is the variable name to use for the composite key ;
 * BLOCK dataset is unduplicated by the block variables, and then a sequential integer KEYNAME variable is added, identifying unique combinations of blocks ;
 * ADJ dataset is edited to include KEYNAME and KEYNAME_ADJ according to the calculation in the BLOCK dataset, and unduplicated on all variables ;
-* %cluster can then be called with the ADJ and BLOCK, and the results can be related back to the true blocks using varibles on the BLOCK file ;
-* macro will write Z_CCK_ADJ into WORK and delete it after ;
+* %cluster can then be called with the ADJ and BLOCK, and the results can be related back to the true blocks using variables on the BLOCK file ;
 %macro CreateCompositeKeys(Adj, Block, Vars, KeyName = CompositeKey);
 * generate the SQL join string for joining the blocks on both sides, and
   generate renaming string at the same time ;
@@ -30,8 +29,10 @@ data &Block;
 set &Block;
 &KeyName = _n_;
 run;
+%local TempTab;
+%let TempTab = %GetNewDSNames(NumNames = 1);
 proc sql;
-create table Z_CCK_Adj as
+create table &TempTab as
   select distinct L.&KeyName, R.&KeyName as &KeyName._ADJ, Adj.*
     from &Adj Adj left join &Block L
     on &MatchStringL left join &Block R
@@ -39,7 +40,7 @@ create table Z_CCK_Adj as
 quit;
 run;
 data &Adj;
-set Z_CCK_Adj;
+set &TempTab;
 run;
-proc delete data = Z_CCK_Adj; run;
+proc delete data = &TempTab; run;
 %mend;

@@ -1,6 +1,6 @@
 * timer macro ;
 *
-- INIT = 0 for initialising a global macro variable to store current time
+- INIT = 1 for initialising a global macro variable to store current time
 - GLOBALVAR is a macro variable name to use to store the global variable (beware of overwriting)
 - MESSAGE is a string to print out before the elapsed time in seconds since the last call using GLOBALVAR
 ;

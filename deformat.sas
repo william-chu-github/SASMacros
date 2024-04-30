@@ -7,8 +7,15 @@
 * specify both to do both ;
 * this macro DOES NOT check to see if the libraries exist/are populated ;
 * it DOES check to see if the TABS specified exist ;
-%macro Deformat(Libs = , Tabs = );
-%local Pos TabsFinal Tab Tabs Libs;
+* SUPPRESSLOGNOTES: 1 to suppress log notes when deformatting, or 0 to allow ;
+%macro Deformat(Libs = , Tabs = , SuppressLogNotes = 1);
+%local Pos TabsFinal Tab Tabs Libs NotesSetting;
+%if (&SuppressLogNotes)
+  %then
+    %do;
+      %let NoteSetting = %sysfunc(getoption(notes));
+      options nonotes;
+    %end;
 %let Libs = %upcase(&Libs);
 %let Tabs = %upcase(&Tabs);
 %if (&Libs = and &Tabs = )
@@ -61,4 +68,10 @@
   %let Pos = %eval(&Pos + 1);
   %let Tab = %scan(&Tabs, &Pos, %str( ));
 %end;
+* reset notes/nonotes setting to original ;
+%if (&SuppressLogNotes)
+  %then
+    %do;
+      options &NoteSetting;
+    %end;
 %mend;

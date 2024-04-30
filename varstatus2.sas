@@ -1,14 +1,16 @@
 * macro that counts populated values of an input dataset ;
-%macro VarStatus2(CurrDS);
+%macro VarStatus2(CurrDS, OutDS);
 %local DSID NumRecs NumVars VarName VarType VarStatus NMiss NDistinct
        NumZeros;
 * open DS ;
 %let DSID = %sysfunc(open(&CurrDS, i));
+%if (&OutDS = ) %then %let OutDS = &CurrDS._Pop;
+
 proc sql noprint;
 * create output table ;
-create table &CurrDS._Pop(
+create table &OutDS(
   VarName character(32), VarStatus character(20),
-  NumZero integer, NumUnique integer, NumMiss integer, NumRecs integer
+  NumZero integer, NumMiss integer, NumUnique integer, NumRecs integer
 );
 * count total number of records in input file ;
 select count(*) into :NumRecs from &CurrDS;
@@ -34,13 +36,13 @@ select count(*) into :NumRecs from &CurrDS;
       %do;
         select count(*) into :NumZeros from &CurrDS where &VarName = 0;
         %let NumZeros = %trim(&NumZeros);
-        insert into &CurrDS._Pop values(
+        insert into &OutDS values(
           "&VarName", "&VarStatus", &NumZeros, &NMiss, &NDistinct, &NumRecs
         );
       %end;
     %else
       %do;
-        insert into &CurrDS._Pop values(
+        insert into &OutDS values(
           "&VarName", "&VarStatus", 0, &NMiss, &NDistinct, &NumRecs
         );
       %end;
